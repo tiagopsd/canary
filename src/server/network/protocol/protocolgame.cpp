@@ -1,6 +1,6 @@
 /**
  * Canary - A free and open-source MMORPG server emulator
- * Copyright (©) 2019-2024 OpenTibiaBR <opentibiabr@outlook.com>
+ * Copyright (©) 2019–present OpenTibiaBR <opentibiabr@outlook.com>
  * Repository: https://github.com/opentibiabr/canary
  * License: https://github.com/opentibiabr/canary/blob/main/LICENSE
  * Contributors: https://github.com/opentibiabr/canary/graphs/contributors
@@ -28,6 +28,7 @@
 #include "creatures/players/management/ban.hpp"
 #include "creatures/players/management/waitlist.hpp"
 #include "creatures/players/player.hpp"
+#include "creatures/players/components/player_forge_history.hpp"
 #include "enums/player_icons.hpp"
 #include "game/game.hpp"
 #include "game/modal_window/modal_window.hpp"
@@ -52,6 +53,7 @@
 #include "enums/object_category.hpp"
 #include "enums/player_blessings.hpp"
 #include "enums/player_cyclopedia.hpp"
+#include "enums/container_type.hpp"
 
 /*
  * NOTE: This namespace is used so that we can add functions without having to declare them in the ".hpp/.hpp" file
@@ -61,6 +63,8 @@
 // This "getIteration" function will allow us to get the total number of iterations that run within a specific map
 // Very useful to send the total amount in certain bytes in the ProtocolGame class
 namespace {
+	constexpr uint64_t PARTY_ANALYZER_THROTTLE_MS = 1000;
+
 	template <typename T>
 	uint16_t getVectorIterationIncreaseCount(T &vector) {
 		uint16_t totalIterationCount = 0;
@@ -398,48 +402,34 @@ void ProtocolGame::AddItem(NetworkMessage &msg, const std::shared_ptr<Item> &ite
 		return;
 	}
 
-	if (it.isContainer()) {
-		uint8_t containerType = 0;
-
-		std::shared_ptr<Container> container = item->getContainer();
-		if (container && containerType == 0 && container->getHoldingPlayer() == player) {
-			uint32_t lootFlags = 0;
-			uint32_t obtainFlags = 0;
-			for (const auto &[category, containerMap] : player->m_managedContainers) {
-				if (!isValidObjectCategory(category)) {
-					continue;
-				}
-				if (containerMap.first == container) {
-					lootFlags |= 1 << category;
-				}
-				if (containerMap.second == container) {
-					obtainFlags |= 1 << category;
-				}
-			}
-
-			if (lootFlags != 0 || obtainFlags != 0) {
-				containerType = 9;
-				msg.addByte(containerType);
+	const auto &container = item->getContainer();
+	if (it.isContainer() && container) {
+		ContainerSpecial_t containerType = container->getSpecialCategory(player);
+		msg.addByte(enumToValue(containerType));
+		switch (containerType) {
+			case ContainerSpecial_t::LootHighlight:
+				break;
+			case ContainerSpecial_t::Manager: {
+				auto [lootFlags, obtainFlags] = container->getObjectCategoryFlags(player);
 				msg.add<uint32_t>(lootFlags);
 				msg.add<uint32_t>(obtainFlags);
+				break;
 			}
-		}
-
-		// Quiver ammo count
-		if (container && containerType == 0 && item->isQuiver() && player->getThing(CONST_SLOT_RIGHT) == item) {
-			uint16_t ammoTotal = 0;
-			for (const std::shared_ptr<Item> &listItem : container->getItemList()) {
-				if (player->getLevel() >= Item::items[listItem->getID()].minReqLevel) {
-					ammoTotal += listItem->getItemCount();
-				}
+			case ContainerSpecial_t::ContentCounter: {
+				auto ammoTotal = container->getAmmoAmount(player);
+				msg.add<uint32_t>(ammoTotal);
+				break;
 			}
-			containerType = 2;
-			msg.addByte(containerType);
-			msg.add<uint32_t>(ammoTotal);
-		}
-
-		if (containerType == 0) {
-			msg.addByte(0x00);
+			case ContainerSpecial_t::QuiverLoot: {
+				auto ammoTotal = container->getAmmoAmount(player);
+				auto [lootFlags, obtainFlags] = container->getObjectCategoryFlags(player);
+				msg.add<uint32_t>(lootFlags);
+				msg.add<uint32_t>(ammoTotal);
+				msg.add<uint32_t>(obtainFlags);
+				break;
+			}
+			default:
+				break;
 		}
 	}
 
@@ -985,6 +975,11 @@ void ProtocolGame::parsePacket(NetworkMessage &msg) {
 
 	uint8_t recvbyte = msg.getByte();
 
+	// Silence ping/pong: 0x1D = pingBack, 0x1E = ping [TRACKS CLIENT BYTES]
+	if (recvbyte != 0x1D && recvbyte != 0x1E) {
+		g_logger().debug("BYTE RECEIVED: 0x{:02X}", recvbyte);
+	}
+
 	if (!player || player->isRemoved()) {
 		if (recvbyte == 0x0F) {
 			disconnect();
@@ -1501,6 +1496,9 @@ void ProtocolGame::GetTileDescription(const std::shared_ptr<Tile> &tile, Network
 	if (creatures) {
 		bool playerAdded = false;
 		for (auto creature : std::ranges::reverse_view(*creatures)) {
+			if (!creature || creature->isRemoved() || !creature->isAlive()) {
+				continue;
+			}
 			if (!player->canSeeCreature(creature)) {
 				continue;
 			}
@@ -2400,7 +2398,7 @@ void ProtocolGame::parseBestiarySendRaces() {
 	NetworkMessage msg;
 	msg.addByte(0xD5);
 	msg.add<uint16_t>(BESTY_RACE_LAST);
-	std::map<uint16_t, std::string> mtype_list = g_game().getBestiaryList();
+	const std::map<uint16_t, std::string> &mtype_list = g_game().getBestiaryList();
 	for (uint8_t i = BESTY_RACE_FIRST; i <= BESTY_RACE_LAST; i++) {
 		std::string BestClass;
 		uint16_t count = 0;
@@ -2443,7 +2441,7 @@ void ProtocolGame::parseBestiarysendMonsterData(NetworkMessage &msg) {
 	auto raceId = msg.get<uint16_t>();
 	std::string Class;
 	std::shared_ptr<MonsterType> mtype = nullptr;
-	std::map<uint16_t, std::string> mtype_list = g_game().getBestiaryList();
+	const std::map<uint16_t, std::string> &mtype_list = g_game().getBestiaryList();
 
 	auto ait = mtype_list.find(raceId);
 	if (ait != mtype_list.end()) {
@@ -2486,7 +2484,7 @@ void ProtocolGame::parseBestiarysendMonsterData(NetworkMessage &msg) {
 	newmsg.addByte(mtype->info.bestiaryStars);
 	newmsg.addByte(mtype->info.bestiaryOccurrence);
 
-	std::vector<LootBlock> lootList = mtype->info.lootItems;
+	const std::vector<LootBlock> &lootList = mtype->info.lootItems;
 	newmsg.addByte(lootList.size());
 	for (const LootBlock &loot : lootList) {
 		int8_t difficult = g_iobestiary().calculateDifficult(loot.chance);
@@ -2573,7 +2571,7 @@ void ProtocolGame::parseCyclopediaMonsterTracker(NetworkMessage &msg) {
 	}
 
 	// Bestiary tracker logic
-	const auto bestiaryMonsters = g_game().getBestiaryList();
+	const auto &bestiaryMonsters = g_game().getBestiaryList();
 	auto it = bestiaryMonsters.find(monsterRaceId);
 	if (it != bestiaryMonsters.end()) {
 		const auto mtype = g_monsters().getMonsterType(it->second);
@@ -2829,6 +2827,7 @@ void ProtocolGame::parsePartyAnalyzerAction(NetworkMessage &msg) const {
 		}
 		party->reloadPrices();
 		party->updateTrackerAnalyzer();
+		player->updatePartyTrackerAnalyzer(true);
 	}
 }
 
@@ -3004,7 +3003,6 @@ void ProtocolGame::sendBestiaryCharms() {
 	msg.addByte(charmList.size());
 	for (const auto &c_type : charmList) {
 		msg.addByte(c_type->id);
-		const auto &charmPoints = c_type->points;
 		if (g_iobestiary().hasCharmUnlockedRuneBit(c_type, player->getUnlockedRunesBit())) {
 			const auto charmTier = player->getCharmTier(c_type->id);
 			msg.addByte(charmTier);
@@ -3081,7 +3079,7 @@ void ProtocolGame::parseBestiarySendCreatures(NetworkMessage &msg) {
 
 	if (search == 1) {
 		auto monsterAmount = msg.get<uint16_t>();
-		std::map<uint16_t, std::string> mtype_list = g_game().getBestiaryList();
+		const std::map<uint16_t, std::string> &mtype_list = g_game().getBestiaryList();
 		for (uint16_t monsterCount = 1; monsterCount <= monsterAmount; monsterCount++) {
 			auto raceid = msg.get<uint16_t>();
 			if (player->getBestiaryKillCount(raceid) > 0) {
@@ -4926,6 +4924,13 @@ void ProtocolGame::sendUnjustifiedPoints(const uint8_t &dayProgress, const uint8
 	writeToOutputBuffer(msg);
 }
 
+void ProtocolGame::sendOpenPvpSituations(uint8_t openPvpSituations) {
+	NetworkMessage msg;
+	msg.addByte(0xB8);
+	msg.addByte(openPvpSituations);
+	writeToOutputBuffer(msg);
+}
+
 void ProtocolGame::sendContainer(uint8_t cid, const std::shared_ptr<Container> &container, bool hasParent, uint16_t firstIndex) {
 	if (!player || !container) {
 		return;
@@ -5312,20 +5317,32 @@ void ProtocolGame::sendMarketEnter(uint32_t depotId) {
 	auto totalItemsCountPosition = msg.getBufferPosition();
 	msg.skipBytes(2); // Total items count
 
-	uint16_t totalItemsCount = 0;
+	const uint16_t entriesLimit = std::numeric_limits<uint16_t>::max();
+	uint16_t entriesSent = 0;
+	bool limitReached = false;
 	for (const auto &[itemId, tierAndCountMap] : lockerItems) {
 		for (const auto &[tier, count] : tierAndCountMap) {
+			if (entriesSent >= entriesLimit) {
+				limitReached = true;
+				break;
+			}
 			msg.add<uint16_t>(itemId);
 			if (!oldProtocol && Item::items[itemId].upgradeClassification > 0) {
 				msg.addByte(tier);
 			}
 			msg.add<uint16_t>(static_cast<uint16_t>(count));
-			totalItemsCount++;
+			++entriesSent;
+		}
+		if (limitReached) {
+			break;
 		}
 	}
 
+	auto endPosition = msg.getBufferPosition();
 	msg.setBufferPosition(totalItemsCountPosition);
-	msg.add<uint16_t>(totalItemsCount);
+	msg.add<uint16_t>(entriesSent);
+	msg.setBufferPosition(endPosition);
+
 	writeToOutputBuffer(msg);
 
 	updateCoinBalance();
@@ -6009,7 +6026,7 @@ void ProtocolGame::sendForgeResult(ForgeAction_t actionType, uint16_t leftItemId
 
 void ProtocolGame::sendForgeHistory(uint8_t page) {
 	page = page + 1;
-	auto historyVector = player->getForgeHistory();
+	const auto &historyVector = player->forgeHistory().get();
 	auto historyVectorLen = historyVector.size();
 
 	uint16_t currentPage = 1;
@@ -6983,9 +7000,9 @@ void ProtocolGame::sendUpdateTileCreature(const Position &pos, uint32_t stackpos
 	msg.addByte(static_cast<uint8_t>(stackpos));
 
 	bool known;
-	uint32_t removedKnown;
+	uint32_t removedKnown = 0;
 	checkCreatureAsKnown(creature->getID(), known, removedKnown);
-	AddCreature(msg, creature, false, removedKnown);
+	AddCreature(msg, creature, known, removedKnown);
 	writeToOutputBuffer(msg);
 }
 
@@ -7123,7 +7140,6 @@ void ProtocolGame::sendAddCreature(const std::shared_ptr<Creature> &creature, co
 
 	if (isLogin) {
 		sendMagicEffect(pos, CONST_ME_TELEPORT);
-		sendHotkeyPreset();
 		sendDisableLoginMusic();
 	}
 
@@ -7197,8 +7213,8 @@ void ProtocolGame::sendAddCreature(const std::shared_ptr<Creature> &creature, co
 	player->sendGameNews();
 	player->sendIcons();
 
-	// We need to manually send the open containers on player login, on IOLoginData it won't work.
-	if (isLogin && oldProtocol) {
+	// Send open containers after login.
+	if (isLogin) {
 		player->openPlayerContainers();
 	}
 }
@@ -7937,7 +7953,7 @@ void ProtocolGame::sendPreyData(const std::unique_ptr<PreySlot> &slot) {
 			msg.addByte(outfit.lookAddons);
 		}
 	} else if (slot->state == PreyDataState_ListSelection) {
-		const std::map<uint16_t, std::string> bestiaryList = g_game().getBestiaryList();
+		const std::map<uint16_t, std::string> &bestiaryList = g_game().getBestiaryList();
 		msg.add<uint16_t>(static_cast<uint16_t>(bestiaryList.size()));
 		std::for_each(bestiaryList.begin(), bestiaryList.end(), [&msg](auto mType) {
 			msg.add<uint16_t>(mType.first);
@@ -8492,10 +8508,21 @@ void ProtocolGame::sendSpecialContainersAvailable() {
 	writeToOutputBuffer(msg);
 }
 
-void ProtocolGame::updatePartyTrackerAnalyzer(const std::shared_ptr<Party> &party) {
+void ProtocolGame::updatePartyTrackerAnalyzer(const std::shared_ptr<Party> &party, bool force) {
 	if (oldProtocol || !player || !party || !party->getLeader()) {
 		return;
 	}
+
+	if (force) {
+		m_nextPartyAnalyzerUpdate = 0;
+	}
+
+	const uint64_t currentTime = OTSYS_TIME();
+	if (!force && currentTime < m_nextPartyAnalyzerUpdate) {
+		return;
+	}
+
+	m_nextPartyAnalyzerUpdate = currentTime + PARTY_ANALYZER_THROTTLE_MS;
 
 	NetworkMessage msg;
 	msg.addByte(0x2B);
@@ -8655,7 +8682,7 @@ void ProtocolGame::sendTaskHuntingData(const std::unique_ptr<TaskHuntingSlot> &s
 		});
 	} else if (slot->state == PreyTaskDataState_ListSelection) {
 		std::shared_ptr<Player> user = player;
-		const std::map<uint16_t, std::string> bestiaryList = g_game().getBestiaryList();
+		const std::map<uint16_t, std::string> &bestiaryList = g_game().getBestiaryList();
 		msg.add<uint16_t>(static_cast<uint16_t>(bestiaryList.size()));
 		std::for_each(bestiaryList.begin(), bestiaryList.end(), [&msg, user](auto mType) {
 			msg.add<uint16_t>(mType.first);
@@ -9678,7 +9705,18 @@ void ProtocolGame::sendBosstiaryCooldownTimer() {
 		if (!timerValue || !timerValue.has_value()) {
 			continue;
 		}
+
+		auto scheduleTimerOpt = g_kv().scoped("eventscheduler")->get("boss-cooldown");
+		uint8_t schedulePercentage = 0;
+		if (scheduleTimerOpt) {
+			schedulePercentage = static_cast<uint8_t>(scheduleTimerOpt->getNumber());
+		}
+		if (schedulePercentage == 0) {
+			schedulePercentage = 100;
+		}
+
 		auto timer = timerValue->getNumber();
+		timer = static_cast<uint32_t>(timer * schedulePercentage / 100);
 		uint64_t sendTimer = timer > 0 ? static_cast<uint64_t>(timer) : 0;
 		msg.add<uint32_t>(bossRaceId); // bossRaceId
 		msg.add<uint64_t>(sendTimer); // Boss cooldown in seconds
@@ -9748,6 +9786,30 @@ void ProtocolGame::sendDoubleSoundEffect(
 	writeToOutputBuffer(msg);
 }
 
+void ProtocolGame::sendAmbientSoundEffect(const SoundAmbientEffect_t id) {
+	if (oldProtocol) {
+		return;
+	}
+
+	NetworkMessage msg;
+	msg.addByte(0x85);
+	msg.addByte(0x00);
+	msg.add<uint16_t>(id);
+	writeToOutputBuffer(msg);
+}
+
+void ProtocolGame::sendMusicSoundEffect(const SoundMusicEffect_t id) {
+	if (oldProtocol) {
+		return;
+	}
+
+	NetworkMessage msg;
+	msg.addByte(0x85);
+	msg.addByte(0x01);
+	msg.add<uint16_t>(id);
+	writeToOutputBuffer(msg);
+}
+
 void ProtocolGame::parseOpenWheel(NetworkMessage &msg) {
 	if (oldProtocol || !g_configManager().getBoolean(TOGGLE_WHEELSYSTEM)) {
 		return;
@@ -9791,23 +9853,8 @@ void ProtocolGame::sendDisableLoginMusic() {
 	NetworkMessage msg;
 	msg.addByte(0x85);
 	msg.addByte(0x01);
-	msg.addByte(0x00);
-	msg.addByte(0x00);
+	msg.add<uint16_t>(0x00);
 	writeToOutputBuffer(msg);
-}
-
-void ProtocolGame::sendHotkeyPreset() {
-	if (!player || oldProtocol) {
-		return;
-	}
-
-	auto vocation = g_vocations().getVocation(player->getVocation()->getBaseId());
-	if (vocation) {
-		NetworkMessage msg;
-		msg.addByte(0x9D);
-		msg.add<uint32_t>(vocation->getClientId());
-		writeToOutputBuffer(msg);
-	}
 }
 
 void ProtocolGame::sendTakeScreenshot(Screenshot_t screenshotType) {

@@ -1,6 +1,6 @@
 /**
  * Canary - A free and open-source MMORPG server emulator
- * Copyright (©) 2019-2024 OpenTibiaBR <opentibiabr@outlook.com>
+ * Copyright (©) 2019–present OpenTibiaBR <opentibiabr@outlook.com>
  * Repository: https://github.com/opentibiabr/canary
  * License: https://github.com/opentibiabr/canary/blob/main/LICENSE
  * Contributors: https://github.com/opentibiabr/canary/graphs/contributors
@@ -195,9 +195,6 @@ void PlayerFunctions::init(lua_State* L) {
 	Lua::registerMethod(L, "Player", "getStorageValue", PlayerFunctions::luaPlayerGetStorageValue);
 	Lua::registerMethod(L, "Player", "setStorageValue", PlayerFunctions::luaPlayerSetStorageValue);
 
-	Lua::registerMethod(L, "Player", "getStorageValueByName", PlayerFunctions::luaPlayerGetStorageValueByName);
-	Lua::registerMethod(L, "Player", "setStorageValueByName", PlayerFunctions::luaPlayerSetStorageValueByName);
-
 	Lua::registerMethod(L, "Player", "addItem", PlayerFunctions::luaPlayerAddItem);
 	Lua::registerMethod(L, "Player", "addItemEx", PlayerFunctions::luaPlayerAddItemEx);
 	Lua::registerMethod(L, "Player", "addItemStash", PlayerFunctions::luaPlayerAddItemStash);
@@ -356,6 +353,8 @@ void PlayerFunctions::init(lua_State* L) {
 
 	Lua::registerMethod(L, "Player", "sendSingleSoundEffect", PlayerFunctions::luaPlayerSendSingleSoundEffect);
 	Lua::registerMethod(L, "Player", "sendDoubleSoundEffect", PlayerFunctions::luaPlayerSendDoubleSoundEffect);
+	Lua::registerMethod(L, "Player", "sendAmbientSoundEffect", PlayerFunctions::luaPlayerSendAmbientSoundEffect);
+	Lua::registerMethod(L, "Player", "sendMusicSoundEffect", PlayerFunctions::luaPlayerSendMusicSoundEffect);
 
 	Lua::registerMethod(L, "Player", "getName", PlayerFunctions::luaPlayerGetName);
 	Lua::registerMethod(L, "Player", "changeName", PlayerFunctions::luaPlayerChangeName);
@@ -2197,7 +2196,7 @@ int PlayerFunctions::luaPlayerSetStorageValue(lua_State* L) {
 	const int32_t value = Lua::getNumber<int32_t>(L, 3);
 	const uint32_t key = Lua::getNumber<uint32_t>(L, 2);
 	const auto &player = Lua::getUserdataShared<Player>(L, 1, "Player");
-	if (IS_IN_KEYRANGE(key, RESERVED_RANGE)) {
+	if (isStorageKeyInRange(key, PSTRG_RESERVED_RANGE_START, PSTRG_RESERVED_RANGE_SIZE)) {
 		std::ostringstream ss;
 		ss << "Accessing reserved range: " << key;
 		Lua::reportErrorFunc(ss.str());
@@ -2216,39 +2215,6 @@ int PlayerFunctions::luaPlayerSetStorageValue(lua_State* L) {
 	} else {
 		lua_pushnil(L);
 	}
-	return 1;
-}
-
-int PlayerFunctions::luaPlayerGetStorageValueByName(lua_State* L) {
-	// player:getStorageValueByName(name)
-	const auto &player = Lua::getUserdataShared<Player>(L, 1, "Player");
-	if (!player) {
-		Lua::reportErrorFunc(Lua::getErrorDesc(LUA_ERROR_PLAYER_NOT_FOUND));
-		Lua::pushBoolean(L, false);
-		return 0;
-	}
-
-	g_logger().warn("The function 'player:getStorageValueByName' is deprecated and will be removed in future versions, please use KV system");
-	const auto name = Lua::getString(L, 2);
-	lua_pushnumber(L, player->getStorageValueByName(name));
-	return 1;
-}
-
-int PlayerFunctions::luaPlayerSetStorageValueByName(lua_State* L) {
-	// player:setStorageValueByName(storageName, value)
-	const auto &player = Lua::getUserdataShared<Player>(L, 1, "Player");
-	if (!player) {
-		Lua::reportErrorFunc(Lua::getErrorDesc(LUA_ERROR_PLAYER_NOT_FOUND));
-		Lua::pushBoolean(L, false);
-		return 0;
-	}
-
-	g_logger().warn("The function 'player:setStorageValueByName' is deprecated and will be removed in future versions, please use KV system");
-	const auto storageName = Lua::getString(L, 2);
-	const int32_t value = Lua::getNumber<int32_t>(L, 3);
-
-	player->addStorageValueByName(storageName, value);
-	Lua::pushBoolean(L, true);
 	return 1;
 }
 
@@ -4216,6 +4182,38 @@ int PlayerFunctions::luaPlayerSendDoubleSoundEffect(lua_State* L) {
 	const bool actor = Lua::getBoolean(L, 4, true);
 
 	player->sendDoubleSoundEffect(player->getPosition(), mainSoundEffect, actor ? SourceEffect_t::OWN : SourceEffect_t::GLOBAL, secondarySoundEffect, actor ? SourceEffect_t::OWN : SourceEffect_t::GLOBAL);
+	Lua::pushBoolean(L, true);
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerSendAmbientSoundEffect(lua_State* L) {
+	// player:sendAmbientSoundEffect(id)
+	const auto &player = Lua::getUserdataShared<Player>(L, 1, "Player");
+	if (!player) {
+		Lua::reportErrorFunc(Lua::getErrorDesc(LUA_ERROR_PLAYER_NOT_FOUND));
+		Lua::pushBoolean(L, false);
+		return 0;
+	}
+
+	const SoundAmbientEffect_t id = Lua::getNumber<SoundAmbientEffect_t>(L, 2);
+
+	player->sendAmbientSoundEffect(id);
+	Lua::pushBoolean(L, true);
+	return 1;
+}
+
+int PlayerFunctions::luaPlayerSendMusicSoundEffect(lua_State* L) {
+	// player:sendMusicSoundEffect(id)
+	const auto &player = Lua::getUserdataShared<Player>(L, 1, "Player");
+	if (!player) {
+		Lua::reportErrorFunc(Lua::getErrorDesc(LUA_ERROR_PLAYER_NOT_FOUND));
+		Lua::pushBoolean(L, false);
+		return 0;
+	}
+
+	const SoundMusicEffect_t id = Lua::getNumber<SoundMusicEffect_t>(L, 2);
+
+	player->sendMusicSoundEffect(id);
 	Lua::pushBoolean(L, true);
 	return 1;
 }

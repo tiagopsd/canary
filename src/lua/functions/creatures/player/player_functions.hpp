@@ -1,6 +1,6 @@
 /**
  * Canary - A free and open-source MMORPG server emulator
- * Copyright (©) 2019-2024 OpenTibiaBR <opentibiabr@outlook.com>
+ * Copyright (©) 2019–present OpenTibiaBR <opentibiabr@outlook.com>
  * Repository: https://github.com/opentibiabr/canary
  * License: https://github.com/opentibiabr/canary/blob/main/LICENSE
  * Contributors: https://github.com/opentibiabr/canary/graphs/contributors
@@ -178,8 +178,6 @@ class PlayerFunctions {
 
 	static int luaPlayerGetStorageValue(lua_State* L);
 	static int luaPlayerSetStorageValue(lua_State* L);
-	static int luaPlayerGetStorageValueByName(lua_State* L);
-	static int luaPlayerSetStorageValueByName(lua_State* L);
 
 	static int luaPlayerAddItem(lua_State* L);
 	static int luaPlayerAddItemEx(lua_State* L);
@@ -339,6 +337,8 @@ class PlayerFunctions {
 
 	static int luaPlayerSendSingleSoundEffect(lua_State* L);
 	static int luaPlayerSendDoubleSoundEffect(lua_State* L);
+	static int luaPlayerSendAmbientSoundEffect(lua_State* L);
+	static int luaPlayerSendMusicSoundEffect(lua_State* L);
 
 	static int luaPlayerGetName(lua_State* L);
 	static int luaPlayerChangeName(lua_State* L);

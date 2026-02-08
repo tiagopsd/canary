@@ -1,6 +1,6 @@
 /**
  * Canary - A free and open-source MMORPG server emulator
- * Copyright (©) 2019-2024 OpenTibiaBR <opentibiabr@outlook.com>
+ * Copyright (©) 2019–present OpenTibiaBR <opentibiabr@outlook.com>
  * Repository: https://github.com/opentibiabr/canary
  * License: https://github.com/opentibiabr/canary/blob/main/LICENSE
  * Contributors: https://github.com/opentibiabr/canary/graphs/contributors
@@ -235,6 +235,7 @@ public:
 	ObjectCategory_t getObjectCategory(const ItemType &it);
 
 	uint64_t getItemMarketPrice(const std::map<uint16_t, uint64_t> &itemMap, bool buyPrice) const;
+	uint64_t getItemMarketAveragePrice(uint16_t itemId, uint8_t tier) const;
 
 	void loadPlayersRecord();
 	void checkPlayersRecord();
@@ -725,7 +726,6 @@ private:
 	std::map<uint32_t, int32_t> forgeMonsterEventIds;
 	std::unordered_set<uint32_t> fiendishMonsters;
 	std::unordered_set<uint32_t> influencedMonsters;
-	void checkImbuements() const;
 	bool playerSaySpell(const std::shared_ptr<Player> &player, SpeakClasses type, const std::string &text);
 	void playerWhisper(const std::shared_ptr<Player> &player, const std::string &text);
 	bool playerYell(const std::shared_ptr<Player> &player, const std::string &text);
